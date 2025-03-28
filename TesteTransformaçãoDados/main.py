@@ -1,108 +1,101 @@
 import pandas as pd
-import tabula
+import pdfplumber
+import zipfile
 import os
-import warnings
+import re
 
-# Configuração para suprimir avisos
-warnings.filterwarnings("ignore")
-
-def extrair_dados_pdf(pdf_path):
-    """Extrai tabelas do PDF com tratamento robusto"""
-    print("Extraindo tabelas do PDF...")
-    try:
-        # Configurações otimizadas para extração
-        dfs = tabula.read_pdf(
-            pdf_path,
-            pages='all',
-            multiple_tables=True,
-            lattice=True,
-            stream=True,
-            guess=False,
-            pandas_options={'header': None},
-            silent=True
-        )
-        
-        if not dfs:
-            print("Nenhuma tabela encontrada no PDF.")
-            return None
+def extract_table_from_pdf(pdf_path):
+    """
+    Extrai tabelas de todas as páginas do PDF.
+    """
+    all_data = []
+    
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            # Extrai tabelas da página atual
+            tables = page.extract_tables()
             
-        # Combinar todas as tabelas encontradas (caso estejam divididas por páginas)
-        df = pd.concat(dfs, ignore_index=True)
-        return df
-        
-    except Exception as e:
-        print(f"Erro na extração: {str(e)}")
-        return None
+            for table in tables:
+                # Adiciona os dados da tabela à lista geral
+                all_data.extend(table)
+    
+    return all_data
 
-def processar_tabela(df):
-    """Processa a tabela conforme requisitos específicos"""
-    if df is None:
-        return None
-
-    print("Processando tabela...")
+def clean_and_process_data(data):
+    """
+    Processa os dados extraídos e retorna um DataFrame limpo.
+    """
+    # Assume que a primeira linha contém os cabeçalhos
+    headers = [h.strip() if h else '' for h in data[0]]
+    rows = data[1:]
     
-    # Verificar se temos dados suficientes
-    if len(df) < 2:
-        print("Tabela com poucos dados - possível erro na extração")
-        return None
+    # Cria DataFrame
+    df = pd.DataFrame(rows, columns=headers)
     
-    # Definir cabeçalhos corretos (assumindo que a primeira linha contém os cabeçalhos)
-    df.columns = df.iloc[0].astype(str).str.strip()
-    df = df[1:].reset_index(drop=True)
+    # Remove linhas vazias ou inválidas
+    df = df.dropna(how='all')
     
-    # Substituir apenas as colunas especificadas
-    df = df.rename(columns={
-        'OD': 'Seg. Odontológica',
-        'AMB': 'Seg. Ambulatorial'
-    })
-    
-    # Limpeza básica dos dados
-    df = df.apply(lambda x: x.str.strip() if x.dtype == 'object' else x)
+    # Limpa os dados em cada coluna
+    for col in df.columns:
+        df[col] = df[col].apply(lambda x: x.strip() if isinstance(x, str) else x)
     
     return df
 
-def salvar_csv(df, nome_arquivo="Rol_Procedimentos.csv"):
-    """Salva o DataFrame em CSV com substituição do arquivo existente"""
-    if df is None or df.empty:
-        print("Nenhum dado válido para salvar!")
-        return False
-
-    try:
-        # Configurações para CSV bem formatado
-        df.to_csv(
-            nome_arquivo,
-            index=False,
-            header=True,
-            encoding='utf-8-sig',
-            sep=',',
-            quotechar='"',
-            quoting=1
-        )
-        
-        print(f"Arquivo CSV sobrescrito com sucesso: {nome_arquivo}")
-        print(f"Local: {os.path.abspath(nome_arquivo)}")
-        return True
-        
-    except Exception as e:
-        print(f"Erro ao salvar CSV: {str(e)}")
-        return False
-
-def main():
-    pdf_local = "Anexo_I.pdf"  # Nome do seu arquivo PDF
+def replace_abbreviations(df):
+    """
+    Substitui as abreviações conforme a legenda fornecida.
+    """
+    replacements = {
+        'OD': 'Seg. Odontológica',
+        'AMB': 'Seg. Ambulatorial',
+        'HCO': 'Seg. Hospitalar Com Obstetrícia',
+        'HSO': 'Seg. Hospitalar Sem Obstetrícia',
+        'REF': 'Plano Referência'
+    }
     
-    if not os.path.exists(pdf_local):
-        print(f"Erro: Arquivo {pdf_local} não encontrado na pasta atual!")
-        print("Certifique-se de que:")
-        print(f"1. O arquivo PDF está na mesma pasta do script")
-        print(f"2. O nome do arquivo é exatamente '{pdf_local}'")
-        return
-
-    # Extrair e processar dados
-    tabela = extrair_dados_pdf(pdf_local)
-    tabela_processada = processar_tabela(tabela)
+    # Substitui em todas as colunas
+    for col in df.columns:
+        if df[col].dtype == 'object':
+            for abbrev, full in replacements.items():
+                df[col] = df[col].str.replace(abbrev, full)
     
-    # Salvar CSV (substituindo se existir)
-    salvar_csv(tabela_processada)
+    return df
+
+def save_to_zip(df, zip_filename, csv_filename='dados_extraidos.csv'):
+    """
+    Salva o DataFrame em CSV e compacta em um arquivo ZIP.
+    """
+    # Salva CSV temporário
+    df.to_csv(csv_filename, index=False, encoding='utf-8-sig')
+    
+    # Cria arquivo ZIP
+    with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        zipf.write(csv_filename)
+    
+    # Remove CSV temporário
+    os.remove(csv_filename)
+
+def main(pdf_path, seu_nome):
+    # Extrai dados do PDF
+    raw_data = extract_table_from_pdf(pdf_path)
+    
+    # Processa os dados
+    df = clean_and_process_data(raw_data)
+    
+    # Substitui abreviações
+    df = replace_abbreviations(df)
+    
+    # Define nome do arquivo ZIP
+    zip_filename = f"Teste_{seu_nome}.zip"
+    
+    # Salva em CSV e compacta
+    save_to_zip(df, zip_filename)
+    
+    print(f"Processo concluído! Arquivo '{zip_filename}' criado com sucesso.")
 
 if __name__ == "__main__":
-    main()
+    # Configurações - altere conforme necessário
+    pdf_path = "Anexo_I.pdf"  # Substitua pelo caminho do seu PDF
+    seu_nome = "Yuri_Fernandes"  # Substitua pelo seu nome
+    
+    main(pdf_path, seu_nome)
