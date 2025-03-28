@@ -1,0 +1,7 @@
+pandas==2.1.4
+tabula-py==2.9.0
+python-dateutil==2.8.2
+numpy==1.26.2
+openpyxl==3.1.2
+distro==1.8.0
+PyPDF2==3.0.1
